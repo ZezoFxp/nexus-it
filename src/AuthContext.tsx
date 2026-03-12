@@ -17,54 +17,85 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check active sessions and sets the user
+    let isMounted = true;
+
     const checkSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        await handleUserSession(session.user);
-      } else {
-        setLoading(false);
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) throw error;
+
+        if (session?.user) {
+          await handleUserSession(session.user);
+        } else {
+          if (isMounted) setLoading(false);
+        }
+      } catch (error) {
+        console.error("Erro ao verificar sessão inicial:", error);
+        if (isMounted) setLoading(false);
       }
     };
 
     checkSession();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      // Evita que dispare duas vezes no primeiro carregamento da página
+      if (event === 'INITIAL_SESSION') return;
+
       if (session?.user) {
         await handleUserSession(session.user);
       } else {
-        setUser(null);
-        setLoading(false);
+        if (isMounted) {
+          setUser(null);
+          setLoading(false);
+        }
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const handleUserSession = async (supabaseUser: any) => {
-    const { data: userData, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', supabaseUser.id)
-      .single();
+    try {
+      // O maybeSingle() evita que o código quebre se o usuário não for encontrado na tabela
+      const { data: userData, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', supabaseUser.id)
+        .maybeSingle(); 
 
-    if (userData) {
-      setUser(userData);
-    } else if (supabaseUser.email === "messias.bandeira65@gmail.com") {
-      const adminData = {
-        id: supabaseUser.id,
-        name: 'Administrador Nexus',
-        email: supabaseUser.email,
-        role: 'admin',
-        avatar: ''
-      };
-      await supabase.from('users').insert([adminData]);
-      setUser(adminData);
-    } else {
+      if (userData) {
+        setUser(userData);
+      } else if (supabaseUser.email === "messias.bandeira65@gmail.com") {
+        // Fluxo de criação do admin hardcoded
+        const adminData = {
+          id: supabaseUser.id,
+          name: 'Administrador Nexus',
+          email: supabaseUser.email,
+          role: 'admin',
+          avatar: ''
+        };
+        const { error: insertError } = await supabase.from('users').insert([adminData]);
+        if (!insertError) {
+          setUser(adminData);
+        } else {
+          console.error("Erro ao criar admin:", insertError);
+        }
+      } else {
+        // Se o usuário não existe na tabela e não é o admin, limpa a sessão local
+        setUser(null);
+        await supabase.auth.signOut();
+      }
+    } catch (error) {
+      console.error("Erro crítico ao processar sessão do usuário:", error);
       setUser(null);
-      await supabase.auth.signOut();
+    } finally {
+      // A MÁGICA ESTÁ AQUI: O bloco finally garante que, independentemente
+      // de dar sucesso ou erro, a tela de loading vai ser desativada!
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const login = async (email: string, pass: string) => {
