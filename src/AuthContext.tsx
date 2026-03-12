@@ -21,8 +21,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const checkSession = async () => {
       try {
+        console.log("[Auth] 1. Iniciando verificação de sessão...");
         const { data: { session }, error } = await supabase.auth.getSession();
-        if (error) throw error;
+        
+        if (error) {
+          console.error("[Auth] Erro ao buscar sessão:", error);
+          throw error;
+        }
+
+        console.log("[Auth] 2. Sessão encontrada no Cache:", session ? "Sim (Achei o Token!)" : "Não (Vazio)");
 
         if (session?.user) {
           await handleUserSession(session.user);
@@ -30,7 +37,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (isMounted) setLoading(false);
         }
       } catch (error) {
-        console.error("Erro ao verificar sessão inicial:", error);
+        console.error("[Auth] Erro Crítico na verificação:", error);
         if (isMounted) setLoading(false);
       }
     };
@@ -38,7 +45,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     checkSession();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      // Evita que dispare duas vezes no primeiro carregamento da página
+      console.log("[Auth] Evento de mudança de estado:", event);
       if (event === 'INITIAL_SESSION') return;
 
       if (session?.user) {
@@ -59,17 +66,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const handleUserSession = async (supabaseUser: any) => {
     try {
-      // O maybeSingle() evita que o código quebre se o usuário não for encontrado na tabela
+      console.log("[Auth] 3. Buscando dados do usuário na tabela pública. ID:", supabaseUser.id);
+      
       const { data: userData, error } = await supabase
         .from('users')
         .select('*')
         .eq('id', supabaseUser.id)
         .maybeSingle(); 
 
+      console.log("[Auth] 4. Resposta do banco de dados:", userData || "Nenhum usuário encontrado");
+
       if (userData) {
         setUser(userData);
       } else if (supabaseUser.email === "messias.bandeira65@gmail.com") {
-        // Fluxo de criação do admin hardcoded
+        console.log("[Auth] Criando conta de Administrador...");
         const adminData = {
           id: supabaseUser.id,
           name: 'Administrador Nexus',
@@ -81,19 +91,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!insertError) {
           setUser(adminData);
         } else {
-          console.error("Erro ao criar admin:", insertError);
+          console.error("[Auth] Erro ao inserir admin:", insertError);
         }
       } else {
-        // Se o usuário não existe na tabela e não é o admin, limpa a sessão local
+        console.log("[Auth] Usuário não encontrado na tabela pública. Deslogando...");
         setUser(null);
         await supabase.auth.signOut();
       }
     } catch (error) {
-      console.error("Erro crítico ao processar sessão do usuário:", error);
+      console.error("[Auth] Erro ao processar sessão:", error);
       setUser(null);
     } finally {
-      // A MÁGICA ESTÁ AQUI: O bloco finally garante que, independentemente
-      // de dar sucesso ou erro, a tela de loading vai ser desativada!
+      console.log("[Auth] 5. Finalizando o estado de Loading!");
       setLoading(false);
     }
   };
