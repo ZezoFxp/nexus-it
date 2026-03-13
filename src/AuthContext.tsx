@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { User } from './types';
-import { supabase } from './supabase';
+import { User } from './types'; 
+import { supabase } from './supabase'; 
 
 interface AuthContextType {
   user: User | null;
@@ -17,95 +17,91 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let isMounted = true;
+    let active = true;
 
-    const checkSession = async () => {
+    const initAuth = async () => {
       try {
-        console.log("[Auth] 1. Iniciando verificação de sessão...");
+        console.log("[Auth] 1. A verificar sessão no Supabase...");
         const { data: { session }, error } = await supabase.auth.getSession();
         
-        if (error) {
-          console.error("[Auth] Erro ao buscar sessão:", error);
-          throw error;
+        if (error) throw error;
+
+        if (!session?.user) {
+          console.log("[Auth] 2. Nenhuma sessão ativa encontrada.");
+          if (active) setLoading(false);
+          return;
         }
 
-        console.log("[Auth] 2. Sessão encontrada no Cache:", session ? "Sim (Achei o Token!)" : "Não (Vazio)");
+        console.log("[Auth] 3. Sessão encontrada. A buscar perfil do utilizador...");
+        
+        // O maybeSingle() garante que não há erro caso a tabela esteja vazia
+        const { data: profile, error: profileError } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', session.user.id)
+          .maybeSingle();
 
-        if (session?.user) {
-          await handleUserSession(session.user);
-        } else {
-          if (isMounted) setLoading(false);
+        if (profileError) {
+          console.error("[Auth] Erro ao buscar perfil:", profileError);
         }
-      } catch (error) {
-        console.error("[Auth] Erro Crítico na verificação:", error);
-        if (isMounted) setLoading(false);
+
+        if (active) {
+          if (profile) {
+            console.log("[Auth] 4. Perfil carregado com sucesso!");
+            setUser(profile);
+          } else {
+            console.warn("[Auth] 4. Perfil não existe na tabela pública. A forçar fim de sessão...");
+            setUser(null);
+            await supabase.auth.signOut();
+          }
+        }
+      } catch (err) {
+        console.error("[Auth] Falha crítica na inicialização:", err);
+        if (active) setUser(null);
+      } finally {
+        // GARANTIA ABSOLUTA DE QUE O CARREGAMENTO TERMINA
+        console.log("[Auth] 5. A desativar o ecrã de carregamento.");
+        if (active) setLoading(false);
       }
     };
 
-    checkSession();
+    initAuth();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log("[Auth] Evento de mudança de estado:", event);
-      if (event === 'INITIAL_SESSION') return;
-
-      if (session?.user) {
-        await handleUserSession(session.user);
-      } else {
-        if (isMounted) {
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        console.log(`[Auth] Evento detetado: ${event}`);
+        
+        if (event === 'SIGNED_OUT' || !session) {
           setUser(null);
+          setLoading(false);
+        } else if (event === 'SIGNED_IN') {
+          setLoading(true);
+          const { data: profile } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', session.user.id)
+            .maybeSingle();
+          
+          if (profile) setUser(profile);
           setLoading(false);
         }
       }
-    });
+    );
+
+    // Tempo Limite de Segurança: Se o Supabase encravar na rede, paramos o loading à força após 5 segundos
+    const safetyTimeout = setTimeout(() => {
+      if (active) {
+        console.warn("[Auth] Aviso: Tempo limite excedido. A forçar paragem do carregamento.");
+        setLoading(false);
+      }
+    }, 5000);
 
     return () => {
-      isMounted = false;
-      subscription.unsubscribe();
+      active = false;
+      authListener.subscription.unsubscribe();
+      clearTimeout(safetyTimeout);
     };
   }, []);
-
-  const handleUserSession = async (supabaseUser: any) => {
-    try {
-      console.log("[Auth] 3. Buscando dados do usuário na tabela pública. ID:", supabaseUser.id);
-      
-      const { data: userData, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', supabaseUser.id)
-        .maybeSingle(); 
-
-      console.log("[Auth] 4. Resposta do banco de dados:", userData || "Nenhum usuário encontrado");
-
-      if (userData) {
-        setUser(userData);
-      } else if (supabaseUser.email === "messias.bandeira65@gmail.com") {
-        console.log("[Auth] Criando conta de Administrador...");
-        const adminData = {
-          id: supabaseUser.id,
-          name: 'Administrador Nexus',
-          email: supabaseUser.email,
-          role: 'admin',
-          avatar: ''
-        };
-        const { error: insertError } = await supabase.from('users').insert([adminData]);
-        if (!insertError) {
-          setUser(adminData);
-        } else {
-          console.error("[Auth] Erro ao inserir admin:", insertError);
-        }
-      } else {
-        console.log("[Auth] Usuário não encontrado na tabela pública. Deslogando...");
-        setUser(null);
-        await supabase.auth.signOut();
-      }
-    } catch (error) {
-      console.error("[Auth] Erro ao processar sessão:", error);
-      setUser(null);
-    } finally {
-      console.log("[Auth] 5. Finalizando o estado de Loading!");
-      setLoading(false);
-    }
-  };
 
   const login = async (email: string, pass: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password: pass });
@@ -114,6 +110,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = async () => {
     await supabase.auth.signOut();
+    setUser(null);
   };
 
   const updateUser = (updatedUser: User) => {
@@ -130,7 +127,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    throw new Error('useAuth deve ser usado dentro de um AuthProvider');
   }
   return context;
 }
