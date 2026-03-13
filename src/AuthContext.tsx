@@ -17,88 +17,74 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let active = true;
+    let isMounted = true;
 
-    const initAuth = async () => {
+    // Função única e segura para buscar os dados do utilizador
+    const loadUserProfile = async (sessionUser: any) => {
       try {
-        console.log("[Auth] 1. A verificar sessão no Supabase...");
-        const { data: { session }, error } = await supabase.auth.getSession();
+        console.log("[Auth] Buscando perfil do utilizador:", sessionUser.id);
         
-        if (error) throw error;
-
-        if (!session?.user) {
-          console.log("[Auth] 2. Nenhuma sessão ativa encontrada.");
-          if (active) setLoading(false);
-          return;
-        }
-
-        console.log("[Auth] 3. Sessão encontrada. A buscar perfil do utilizador...");
-        
-        // O maybeSingle() garante que não há erro caso a tabela esteja vazia
-        const { data: profile, error: profileError } = await supabase
+        const { data: profile, error } = await supabase
           .from('users')
           .select('*')
-          .eq('id', session.user.id)
+          .eq('id', sessionUser.id)
           .maybeSingle();
 
-        if (profileError) {
-          console.error("[Auth] Erro ao buscar perfil:", profileError);
-        }
+        if (error) throw error;
 
-        if (active) {
+        if (isMounted) {
           if (profile) {
-            console.log("[Auth] 4. Perfil carregado com sucesso!");
+            console.log("[Auth] Perfil carregado com sucesso!");
             setUser(profile);
           } else {
-            console.warn("[Auth] 4. Perfil não existe na tabela pública. A forçar fim de sessão...");
+            console.warn("[Auth] Perfil não encontrado na base de dados. A limpar sessão...");
             setUser(null);
             await supabase.auth.signOut();
           }
         }
       } catch (err) {
-        console.error("[Auth] Falha crítica na inicialização:", err);
-        if (active) setUser(null);
+        console.error("[Auth] Erro ao comunicar com a base de dados:", err);
+        if (isMounted) setUser(null);
       } finally {
-        // GARANTIA ABSOLUTA DE QUE O CARREGAMENTO TERMINA
-        console.log("[Auth] 5. A desativar o ecrã de carregamento.");
-        if (active) setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
 
-    initAuth();
+    // O Listener ÚNICO: Ele resolve tudo sozinho, sem atropelamentos
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log(`[Auth] Evento do Supabase: ${event}`);
 
-    const { data: authListener } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log(`[Auth] Evento detetado: ${event}`);
-        
-        if (event === 'SIGNED_OUT' || !session) {
+      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        if (session?.user) {
+          // Tem token! Vamos buscar os dados
+          loadUserProfile(session.user);
+        } else {
+          // É uma visita nova, não tem token
+          if (isMounted) {
+            setUser(null);
+            setLoading(false);
+          }
+        }
+      } else if (event === 'SIGNED_OUT') {
+        // Utilizador fez logout
+        if (isMounted) {
           setUser(null);
-          setLoading(false);
-        } else if (event === 'SIGNED_IN') {
-          setLoading(true);
-          const { data: profile } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', session.user.id)
-            .maybeSingle();
-          
-          if (profile) setUser(profile);
           setLoading(false);
         }
       }
-    );
+    });
 
-    // Tempo Limite de Segurança: Se o Supabase encravar na rede, paramos o loading à força após 5 segundos
+    // Timeout de emergência caso a internet caia durante a verificação
     const safetyTimeout = setTimeout(() => {
-      if (active) {
-        console.warn("[Auth] Aviso: Tempo limite excedido. A forçar paragem do carregamento.");
+      if (isMounted) {
+        console.warn("[Auth] Timeout de emergência: A libertar o ecrã de carregamento.");
         setLoading(false);
       }
     }, 5000);
 
     return () => {
-      active = false;
-      authListener.subscription.unsubscribe();
+      isMounted = false;
+      subscription.unsubscribe();
       clearTimeout(safetyTimeout);
     };
   }, []);
@@ -110,7 +96,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = async () => {
     await supabase.auth.signOut();
-    setUser(null);
   };
 
   const updateUser = (updatedUser: User) => {
