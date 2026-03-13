@@ -10,13 +10,14 @@ export default function Inventory() {
   const { requestDelete, isPending } = useUndo();
 
   const handleSupabaseError = (error: any, operationType: string, path: string | null) => {
-    const errInfo = {
-      error: error.message || String(error),
-      operationType,
-      path
-    };
+  const errInfo = {
+    error: error.message || String(error),
+    operationType,
+    path
+  };
     console.error('Supabase Error: ', JSON.stringify(errInfo));
-    throw new Error(JSON.stringify(errInfo));
+    // Mostra um aviso visual para o usuário em vez de travar o botão
+    alert(`Erro ao salvar no banco: ${error.message || 'Verifique o console'}`); 
   };
 
   const [items, setItems] = useState<InventoryItem[]>([]);
