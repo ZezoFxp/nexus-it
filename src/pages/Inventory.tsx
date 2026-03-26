@@ -10,14 +10,13 @@ export default function Inventory() {
   const { requestDelete, isPending } = useUndo();
 
   const handleSupabaseError = (error: any, operationType: string, path: string | null) => {
-  const errInfo = {
-    error: error.message || String(error),
-    operationType,
-    path
-  };
+    const errInfo = {
+      error: error.message || String(error),
+      operationType,
+      path
+    };
     console.error('Supabase Error: ', JSON.stringify(errInfo));
-    // Mostra um aviso visual para o usuário em vez de travar o botão
-    alert(`Erro ao salvar no banco: ${error.message || 'Verifique o console'}`); 
+    alert(`Erro ao salvar no banco: ${error.message || 'Verifique o console'}`);
   };
 
   const [items, setItems] = useState<InventoryItem[]>([]);
@@ -37,6 +36,8 @@ export default function Inventory() {
     serialNumber: '',
     status: 'available',
     responsible: '',
+    anydeskId: '',
+    anydeskPassword: '',
     notes: ''
   });
 
@@ -56,7 +57,7 @@ export default function Inventory() {
         } else if (payload.eventType === 'UPDATE') {
           setItems(prev => prev.map(i => i.id === payload.new.id ? payload.new as InventoryItem : i));
         } else if (payload.eventType === 'DELETE') {
-          setItems(prev => prev.filter(i => i.id === payload.old.id));
+          setItems(prev => prev.filter(i => i.id !== payload.old.id));
         }
       })
       .subscribe();
@@ -72,12 +73,15 @@ export default function Inventory() {
       ...newItem,
       createdAt: new Date().toISOString()
     }]);
-    
+
     if (error) {
       handleSupabaseError(error, 'create', 'inventory');
     } else {
       setIsModalOpen(false);
-      setNewItem({ name: '', type: 'Computador', serialNumber: '', status: 'available', responsible: '', notes: '' });
+      setNewItem({
+        name: '', type: 'Computador', serialNumber: '', status: 'available',
+        responsible: '', anydeskId: '', anydeskPassword: '', notes: ''
+      });
     }
   };
 
@@ -86,7 +90,7 @@ export default function Inventory() {
     if (!editingItem) return;
     const { id, ...data } = editingItem;
     const { error } = await supabase.from('inventory').update(data).eq('id', id);
-    
+
     if (error) {
       handleSupabaseError(error, 'update', `inventory/${id}`);
     } else {
@@ -113,7 +117,7 @@ export default function Inventory() {
     const matchesType = !filter.type || item.type === filter.type;
     const matchesStatus = !filter.status || item.status === filter.status;
     const matchesResponsible = !filter.responsible || item.responsible?.toLowerCase().includes(filter.responsible.toLowerCase());
-    
+
     return matchesSearch && matchesType && matchesStatus && matchesResponsible;
   });
 
@@ -135,7 +139,7 @@ export default function Inventory() {
           <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">Inventário</h1>
           <p className="text-zinc-500 text-sm">Controle de máquinas, periféricos e ativos de TI</p>
         </div>
-        <button 
+        <button
           onClick={() => setIsModalOpen(true)}
           className="bg-zinc-900 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-zinc-800 transition-all shadow-lg"
         >
@@ -147,18 +151,18 @@ export default function Inventory() {
       <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm flex flex-col md:flex-row items-center gap-4">
         <div className="relative flex-1 w-full">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
-          <input 
-            type="text" 
-            placeholder="Buscar por nome ou serial..." 
+          <input
+            type="text"
+            placeholder="Buscar por nome ou serial..."
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-zinc-200"
           />
         </div>
-        
+
         <div className="flex items-center gap-2 w-full md:w-auto">
           <Filter size={18} className="text-zinc-400" />
-          <select 
+          <select
             value={filter.type}
             onChange={e => setFilter({...filter, type: e.target.value})}
             className="bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
@@ -167,7 +171,7 @@ export default function Inventory() {
             {types.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
 
-          <select 
+          <select
             value={filter.status}
             onChange={e => setFilter({...filter, status: e.target.value})}
             className="bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
@@ -179,7 +183,7 @@ export default function Inventory() {
             <option value="broken">Defeito</option>
           </select>
 
-          <input 
+          <input
             type="text"
             placeholder="Responsável..."
             value={filter.responsible}
@@ -221,21 +225,21 @@ export default function Inventory() {
                     item.status === 'maintenance' ? 'text-amber-600 bg-amber-50 border-amber-100' :
                     'text-red-600 bg-red-50 border-red-100'
                   }`}>
-                    {item.status === 'available' ? 'Disponível' : 
-                     item.status === 'in_use' ? 'Em Uso' : 
+                    {item.status === 'available' ? 'Disponível' :
+                     item.status === 'in_use' ? 'Em Uso' :
                      item.status === 'maintenance' ? 'Manutenção' : 'Defeito'}
                   </span>
                 </td>
                 <td className="px-6 py-4 text-sm text-zinc-600">{item.responsible || '-'}</td>
                 <td className="px-6 py-4 text-right">
                   <div className="flex items-center justify-end gap-2">
-                    <button 
+                    <button
                       onClick={() => setEditingItem(item)}
                       className="p-1.5 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 rounded-md transition-colors"
                     >
                       <Edit2 size={16} />
                     </button>
-                    <button 
+                    <button
                       onClick={() => setDeleteConfirmId(item.id as string)}
                       className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
                     >
@@ -249,10 +253,10 @@ export default function Inventory() {
         </table>
       </div>
 
-      {/* Create Modal */}
+      {/* ── Create Modal ───────────────────────────────────── */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-zinc-950/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden"
@@ -261,21 +265,21 @@ export default function Inventory() {
               <h2 className="text-xl font-bold text-zinc-900">Novo Ativo</h2>
               <button onClick={() => setIsModalOpen(false)} className="text-zinc-400 hover:text-zinc-600 text-2xl">&times;</button>
             </div>
-            <form onSubmit={handleCreate} className="p-6 space-y-4">
+            <form onSubmit={handleCreate} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Nome do Item</label>
-                  <input 
+                  <input
                     required
                     value={newItem.name}
                     onChange={e => setNewItem({...newItem, name: e.target.value})}
-                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none"
+                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none focus:ring-2 focus:ring-zinc-200"
                     placeholder="Ex: Dell Latitude 5420"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Tipo</label>
-                  <select 
+                  <select
                     value={newItem.type}
                     onChange={e => setNewItem({...newItem, type: e.target.value})}
                     className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none"
@@ -290,7 +294,7 @@ export default function Inventory() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Serial / Service Tag</label>
-                  <input 
+                  <input
                     value={newItem.serialNumber}
                     onChange={e => setNewItem({...newItem, serialNumber: e.target.value})}
                     className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none font-mono"
@@ -298,7 +302,7 @@ export default function Inventory() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Status</label>
-                  <select 
+                  <select
                     value={newItem.status}
                     onChange={e => setNewItem({...newItem, status: e.target.value as any})}
                     className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none"
@@ -311,7 +315,7 @@ export default function Inventory() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Responsável</label>
-                  <input 
+                  <input
                     value={newItem.responsible}
                     onChange={e => setNewItem({...newItem, responsible: e.target.value})}
                     className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none"
@@ -319,14 +323,39 @@ export default function Inventory() {
                   />
                 </div>
               </div>
+
+            {/* AnyDesk */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">ID AnyDesk</label>
+                  <input
+                    value={newItem.anydeskId}
+                    onChange={e => setNewItem({...newItem, anydeskId: e.target.value})}
+                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none font-mono focus:ring-2 focus:ring-zinc-200"
+                    placeholder="0 000 000 000"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Senha AnyDesk</label>
+                  <input
+                    value={newItem.anydeskPassword}
+                    onChange={e => setNewItem({...newItem, anydeskPassword: e.target.value})}
+                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none font-mono focus:ring-2 focus:ring-zinc-200"
+                    placeholder="••••••••"
+                  />
+                </div>
+              </div>
+              
+
               <div>
                 <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Notas</label>
-                <textarea 
+                <textarea
                   value={newItem.notes}
                   onChange={e => setNewItem({...newItem, notes: e.target.value})}
                   className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none h-20 resize-none"
                 />
               </div>
+
               <div className="pt-4 flex gap-3">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 px-4 py-2.5 border border-zinc-200 rounded-lg font-bold text-zinc-600">Cancelar</button>
                 <button type="submit" className="flex-1 px-4 py-2.5 bg-zinc-900 text-white rounded-lg font-bold">Salvar Ativo</button>
@@ -336,10 +365,10 @@ export default function Inventory() {
         </div>
       )}
 
-      {/* Edit Modal */}
+      {/* ── Edit Modal ─────────────────────────────────────── */}
       {editingItem && (
         <div className="fixed inset-0 bg-zinc-950/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden"
@@ -348,20 +377,20 @@ export default function Inventory() {
               <h2 className="text-xl font-bold text-zinc-900">Editar Ativo</h2>
               <button onClick={() => setEditingItem(null)} className="text-zinc-400 hover:text-zinc-600 text-2xl">&times;</button>
             </div>
-            <form onSubmit={handleUpdate} className="p-6 space-y-4">
+            <form onSubmit={handleUpdate} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Nome do Item</label>
-                  <input 
+                  <input
                     required
                     value={editingItem.name}
                     onChange={e => setEditingItem({...editingItem, name: e.target.value})}
-                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none"
+                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none focus:ring-2 focus:ring-zinc-200"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Tipo</label>
-                  <select 
+                  <select
                     value={editingItem.type}
                     onChange={e => setEditingItem({...editingItem, type: e.target.value})}
                     className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none"
@@ -376,7 +405,7 @@ export default function Inventory() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Serial / Service Tag</label>
-                  <input 
+                  <input
                     value={editingItem.serialNumber}
                     onChange={e => setEditingItem({...editingItem, serialNumber: e.target.value})}
                     className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none font-mono"
@@ -384,7 +413,7 @@ export default function Inventory() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Status</label>
-                  <select 
+                  <select
                     value={editingItem.status}
                     onChange={e => setEditingItem({...editingItem, status: e.target.value as any})}
                     className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none"
@@ -397,21 +426,45 @@ export default function Inventory() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Responsável</label>
-                  <input 
+                  <input
                     value={editingItem.responsible}
                     onChange={e => setEditingItem({...editingItem, responsible: e.target.value})}
                     className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none"
                   />
                 </div>
               </div>
+
+              {/* AnyDesk */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">ID AnyDesk</label>
+                  <input
+                    value={editingItem.anydeskId || ''}
+                    onChange={e => setEditingItem({...editingItem, anydeskId: e.target.value})}
+                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none font-mono focus:ring-2 focus:ring-zinc-200"
+                    placeholder="0 000 000 000"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Senha AnyDesk</label>
+                  <input
+                    value={editingItem.anydeskPassword || ''}
+                    onChange={e => setEditingItem({...editingItem, anydeskPassword: e.target.value})}
+                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none font-mono focus:ring-2 focus:ring-zinc-200"
+                    placeholder="••••••••"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-zinc-500 uppercase mb-1.5">Notas</label>
-                <textarea 
+                <textarea
                   value={editingItem.notes}
                   onChange={e => setEditingItem({...editingItem, notes: e.target.value})}
                   className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-2.5 outline-none h-20 resize-none"
                 />
               </div>
+
               <div className="pt-4 flex gap-3">
                 <button type="button" onClick={() => setEditingItem(null)} className="flex-1 px-4 py-2.5 border border-zinc-200 rounded-lg font-bold text-zinc-600">Cancelar</button>
                 <button type="submit" className="flex-1 px-4 py-2.5 bg-zinc-900 text-white rounded-lg font-bold">Salvar Alterações</button>
@@ -421,7 +474,7 @@ export default function Inventory() {
         </div>
       )}
 
-      <DeleteConfirmationModal 
+      <DeleteConfirmationModal
         isOpen={!!deleteConfirmId}
         onClose={() => setDeleteConfirmId(null)}
         onConfirm={() => deleteConfirmId && handleDelete(deleteConfirmId)}

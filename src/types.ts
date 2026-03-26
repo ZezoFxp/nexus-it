@@ -27,6 +27,8 @@ export interface InventoryItem {
   status: 'available' | 'in_use' | 'maintenance' | 'broken';
   assignedTo?: string;
   assignedToName?: string;
+  anydeskId: string;
+  anydeskPassword: string;
   notes: string;
 }
 

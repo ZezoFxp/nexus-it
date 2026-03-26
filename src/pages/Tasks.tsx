@@ -107,7 +107,7 @@ function SortableTaskCard({ task, onDelete, onEdit }: SortableTaskCardProps) {
         {task.dueDate && (
           <div className="flex items-center gap-1 text-[10px] text-zinc-400 font-medium">
             <Clock size={10} />
-            {new Date(task.dueDate).toLocaleDateString('pt-BR')}
+            {new Date(task.dueDate + 'T00:00:00').toLocaleDateString('pt-BR')}
           </div>
         )}
       </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../supabase';
 import { Task, User } from '../types';
 import { 
@@ -10,7 +10,8 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  CalendarDays
+  CalendarDays,
+  X
 } from 'lucide-react';
 import { 
   format, 
@@ -30,33 +31,44 @@ import {
 import { ptBR } from 'date-fns/locale';
 import { motion } from 'motion/react';
 
-export default function Dashboard() {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
-  const [view, setView] = useState<'list' | 'calendar'>('list');
-  const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [filter, setFilter] = useState({
-    priority: '',
-    assignedTo: '',
-    startDate: '',
-    endDate: ''
-  });
+// ── Status filter options ──────────────────────────────────
+type StatusFilter = '' | 'a fazer' | 'em andamento' | 'atrasado' | 'concluido';
 
+const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
+  { value: '',             label: 'Todos os Status' },
+  { value: 'a fazer',      label: 'A Fazer'         },
+  { value: 'em andamento', label: 'Em Andamento'    },
+  { value: 'atrasado',     label: 'Em Atraso'       },
+  { value: 'concluido',    label: 'Concluídas'      },
+];
+
+export default function Dashboard() {
+  const [tasks, setTasks]   = useState<Task[]>([]);
+  const [users, setUsers]   = useState<User[]>([]);
+  const [view, setView]     = useState<'list' | 'calendar'>('list');
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+
+  // Filters
+  const [filterStatus,     setFilterStatus]     = useState<StatusFilter>('');
+  const [filterPriority,   setFilterPriority]   = useState('');
+  const [filterAssignedTo, setFilterAssignedTo] = useState('');
+  const [filterStartDate,  setFilterStartDate]  = useState('');
+  const [filterEndDate,    setFilterEndDate]    = useState('');
+
+  // ── Real-time data ─────────────────────────────────────
   useEffect(() => {
     const fetchTasks = async () => {
       const { data } = await supabase.from('tasks').select('*');
       if (data) setTasks(data);
     };
-
     const fetchUsers = async () => {
       const { data } = await supabase.from('users').select('*');
       if (data) setUsers(data);
     };
-
     fetchTasks();
     fetchUsers();
 
-    const tasksSubscription = supabase
+    const tasksSub = supabase
       .channel('tasks_dashboard')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, (payload) => {
         if (payload.eventType === 'INSERT') {
@@ -64,12 +76,12 @@ export default function Dashboard() {
         } else if (payload.eventType === 'UPDATE') {
           setTasks(prev => prev.map(t => t.id === payload.new.id ? payload.new as Task : t));
         } else if (payload.eventType === 'DELETE') {
-          setTasks(prev => prev.filter(t => t.id === payload.old.id));
+          setTasks(prev => prev.filter(t => t.id !== payload.old.id));
         }
       })
       .subscribe();
 
-    const usersSubscription = supabase
+    const usersSub = supabase
       .channel('users_dashboard')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, (payload) => {
         if (payload.eventType === 'INSERT') {
@@ -77,64 +89,105 @@ export default function Dashboard() {
         } else if (payload.eventType === 'UPDATE') {
           setUsers(prev => prev.map(u => u.id === payload.new.id ? payload.new as User : u));
         } else if (payload.eventType === 'DELETE') {
-          setUsers(prev => prev.filter(u => u.id === payload.old.id));
+          setUsers(prev => prev.filter(u => u.id !== payload.old.id));
         }
       })
       .subscribe();
 
     return () => {
-      supabase.removeChannel(tasksSubscription);
-      supabase.removeChannel(usersSubscription);
+      supabase.removeChannel(tasksSub);
+      supabase.removeChannel(usersSub);
     };
   }, []);
 
-  const filteredTasks = tasks.filter(task => {
-    if (filter.priority && task.priority !== filter.priority) return false;
-    if (filter.assignedTo && task.assignedTo !== filter.assignedTo) return false;
-    
-    if (task.dueDate) {
-      const taskDate = parseISO(task.dueDate);
-      if (filter.startDate && isBefore(taskDate, parseISO(filter.startDate))) return false;
-      if (filter.endDate && isBefore(parseISO(filter.endDate), taskDate)) return false;
-    } else if (filter.startDate || filter.endDate) {
-      return false;
-    }
+  // ── Stats (always from full task list, unaffected by filters) ──
+  const stats = useMemo(() => ({
+    pending:   tasks.filter(t => t.status !== 'concluido').length,
+    overdue:   tasks.filter(t =>
+      t.status !== 'concluido' &&
+      t.dueDate &&
+      isBefore(parseISO(t.dueDate), startOfDay(new Date()))
+    ).length,
+    completed: tasks.filter(t => t.status === 'concluido').length,
+  }), [tasks]);
 
-    return true;
-  });
+  // ── Filtered list ──────────────────────────────────────
+  // Key rule: completed tasks are HIDDEN by default.
+  // They only appear when the user explicitly picks "Concluídas".
+  // 'atrasado' is NOT a real DB status — it matches any non-completed
+  // task whose dueDate is strictly before today.
+  const filteredTasks = useMemo(() => {
+    const today = startOfDay(new Date());
+    return tasks.filter(task => {
+      if (filterStatus === 'atrasado') {
+        // Overdue = not completed + has a due date + that date is in the past
+        if (task.status === 'concluido') return false;
+        if (!task.dueDate) return false;
+        if (!isBefore(parseISO(task.dueDate), today)) return false;
+      } else if (filterStatus) {
+        // Real status match ('a fazer', 'em andamento', 'concluido')
+        if (task.status !== filterStatus) return false;
+      } else {
+        // Default: hide completed
+        if (task.status === 'concluido') return false;
+      }
 
-  const stats = {
-    pending: filteredTasks.filter(t => t.status !== 'concluido').length,
-    overdue: filteredTasks.filter(t => t.status !== 'concluido' && t.dueDate && isBefore(parseISO(t.dueDate), startOfDay(new Date()))).length,
-    completed: filteredTasks.filter(t => t.status === 'concluido').length
+      if (filterPriority && task.priority !== filterPriority) return false;
+      if (filterAssignedTo && task.assignedTo !== filterAssignedTo) return false;
+
+      if (task.dueDate) {
+        const taskDate = parseISO(task.dueDate);
+        if (filterStartDate && isBefore(taskDate, parseISO(filterStartDate))) return false;
+        if (filterEndDate   && isBefore(parseISO(filterEndDate), taskDate))   return false;
+      } else if (filterStartDate || filterEndDate) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [tasks, filterStatus, filterPriority, filterAssignedTo, filterStartDate, filterEndDate]);
+
+  const hasActiveFilters =
+    filterStatus || filterPriority || filterAssignedTo || filterStartDate || filterEndDate;
+
+  const clearFilters = () => {
+    setFilterStatus('');
+    setFilterPriority('');
+    setFilterAssignedTo('');
+    setFilterStartDate('');
+    setFilterEndDate('');
   };
 
+  // ── Helpers ────────────────────────────────────────────
   const getPriorityColor = (priority: string) => {
     switch (priority) {
-      case 'high': return 'text-red-600 bg-red-50 border-red-100';
+      case 'high':   return 'text-red-600 bg-red-50 border-red-100';
       case 'medium': return 'text-amber-600 bg-amber-50 border-amber-100';
-      case 'low': return 'text-emerald-600 bg-emerald-50 border-emerald-100';
-      default: return 'text-zinc-600 bg-zinc-50 border-zinc-100';
+      case 'low':    return 'text-emerald-600 bg-emerald-50 border-emerald-100';
+      default:       return 'text-zinc-600 bg-zinc-50 border-zinc-100';
     }
   };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'concluido': return <CheckCircle2 className="text-emerald-500" size={18} />;
+      case 'concluido':    return <CheckCircle2 className="text-emerald-500" size={18} />;
       case 'em andamento': return <Clock className="text-amber-500" size={18} />;
-      default: return <AlertCircle className="text-zinc-400" size={18} />;
+      default:             return <AlertCircle className="text-zinc-400" size={18} />;
     }
   };
 
-  // Calendar Logic
-  const monthStart = startOfMonth(currentMonth);
-  const monthEnd = endOfMonth(monthStart);
+  // ── Calendar ───────────────────────────────────────────
+  const monthStart    = startOfMonth(currentMonth);
+  const monthEnd      = endOfMonth(monthStart);
   const calendarStart = startOfWeek(monthStart);
-  const calendarEnd = endOfWeek(monthEnd);
-  const calendarDays = eachDayOfInterval({ start: calendarStart, end: calendarEnd });
+  const calendarEnd   = endOfWeek(monthEnd);
+  const calendarDays  = eachDayOfInterval({ start: calendarStart, end: calendarEnd });
 
+  // ── Render ─────────────────────────────────────────────
   return (
     <div className="space-y-6">
+
+      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">Dashboard</h1>
@@ -142,28 +195,28 @@ export default function Dashboard() {
         </div>
 
         <div className="flex items-center gap-2 bg-white p-1 rounded-lg border border-zinc-200 shadow-sm">
-          <button 
+          <button
             onClick={() => setView('list')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === 'list' ? 'bg-zinc-900 text-white shadow-md' : 'text-zinc-500 hover:bg-zinc-50'}`}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all
+              ${view === 'list' ? 'bg-zinc-900 text-white shadow-md' : 'text-zinc-500 hover:bg-zinc-50'}`}
           >
-            <ListIcon size={16} />
-            Lista
+            <ListIcon size={16} /> Lista
           </button>
-          <button 
+          <button
             onClick={() => setView('calendar')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === 'calendar' ? 'bg-zinc-900 text-white shadow-md' : 'text-zinc-500 hover:bg-zinc-50'}`}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all
+              ${view === 'calendar' ? 'bg-zinc-900 text-white shadow-md' : 'text-zinc-500 hover:bg-zinc-50'}`}
           >
-            <CalendarIcon size={16} />
-            Calendário
+            <CalendarIcon size={16} /> Calendário
           </button>
         </div>
       </div>
 
-      {/* Stats Blocks */}
+      {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
+        {/* Pending */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
           className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm flex items-center gap-4"
         >
           <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
@@ -175,10 +228,9 @@ export default function Dashboard() {
           </div>
         </motion.div>
 
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
+        {/* Overdue */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
           className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm flex items-center gap-4"
         >
           <div className="w-12 h-12 rounded-xl bg-red-50 flex items-center justify-center text-red-600">
@@ -190,11 +242,17 @@ export default function Dashboard() {
           </div>
         </motion.div>
 
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm flex items-center gap-4"
+        {/* Completed — clicking sets the status filter to show completed tasks */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
+          onClick={() => {
+            setFilterStatus(filterStatus === 'concluido' ? '' : 'concluido');
+          }}
+          className={`bg-white p-6 rounded-2xl border shadow-sm flex items-center gap-4 cursor-pointer transition-all
+            ${filterStatus === 'concluido'
+              ? 'border-emerald-400 ring-2 ring-emerald-100'
+              : 'border-zinc-200 hover:border-emerald-200 hover:shadow-md'}`}
+          title="Clique para ver as tarefas concluídas na lista"
         >
           <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600">
             <CheckCircle2 size={24} />
@@ -202,19 +260,36 @@ export default function Dashboard() {
           <div>
             <p className="text-sm font-medium text-zinc-500">Casos Concluídos</p>
             <p className="text-2xl font-bold text-zinc-900">{stats.completed}</p>
+            <p className="text-[11px] text-zinc-400 mt-0.5">
+              {filterStatus === 'concluido' ? 'Mostrando na lista ↓' : 'Clique para ver na lista'}
+            </p>
           </div>
         </motion.div>
       </div>
 
-      <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm flex flex-wrap items-center gap-4">
-        <div className="flex items-center gap-2 text-zinc-500 mr-2">
+      {/* Filters bar */}
+      <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 text-zinc-500 mr-1">
           <Filter size={18} />
           <span className="text-sm font-medium">Filtros:</span>
         </div>
-        
-        <select 
-          value={filter.priority}
-          onChange={(e) => setFilter({...filter, priority: e.target.value})}
+
+        {/* Status — NEW */}
+        <select
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value as StatusFilter)}
+          className={`bg-zinc-50 border rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-zinc-200 transition-colors
+            ${filterStatus ? 'border-zinc-400 font-semibold text-zinc-800' : 'border-zinc-200 text-zinc-600'}`}
+        >
+          {STATUS_OPTIONS.map(opt => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+
+        {/* Priority */}
+        <select
+          value={filterPriority}
+          onChange={(e) => setFilterPriority(e.target.value)}
           className="bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
         >
           <option value="">Todas Prioridades</option>
@@ -223,32 +298,53 @@ export default function Dashboard() {
           <option value="low">Baixa</option>
         </select>
 
-        <select 
-          value={filter.assignedTo}
-          onChange={(e) => setFilter({...filter, assignedTo: e.target.value})}
+        {/* Assignee */}
+        <select
+          value={filterAssignedTo}
+          onChange={(e) => setFilterAssignedTo(e.target.value)}
           className="bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
         >
           <option value="">Todos Operadores</option>
           {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
         </select>
 
+        {/* Date range */}
         <div className="flex items-center gap-2">
-          <input 
+          <input
             type="date"
-            value={filter.startDate}
-            onChange={(e) => setFilter({...filter, startDate: e.target.value})}
+            value={filterStartDate}
+            onChange={(e) => setFilterStartDate(e.target.value)}
             className="bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
           />
-          <span className="text-zinc-400">até</span>
-          <input 
+          <span className="text-zinc-400 text-sm">até</span>
+          <input
             type="date"
-            value={filter.endDate}
-            onChange={(e) => setFilter({...filter, endDate: e.target.value})}
+            value={filterEndDate}
+            onChange={(e) => setFilterEndDate(e.target.value)}
             className="bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
           />
         </div>
+
+        {/* Clear button — only when there's something to clear */}
+        {hasActiveFilters && (
+          <button
+            onClick={clearFilters}
+            className="flex items-center gap-1.5 text-xs font-semibold text-zinc-400 hover:text-red-500 transition-colors ml-auto"
+          >
+            <X size={14} /> Limpar filtros
+          </button>
+        )}
       </div>
 
+      {/* Contextual hint when showing completed */}
+      {filterStatus === 'concluido' && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-emerald-50 border border-emerald-100 rounded-lg text-sm text-emerald-700">
+          <CheckCircle2 size={15} />
+          Exibindo apenas tarefas concluídas. Limpe o filtro de status para voltar à visão padrão.
+        </div>
+      )}
+
+      {/* List View */}
       {view === 'list' ? (
         <div className="bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden">
           <table className="w-full text-left border-collapse">
@@ -264,11 +360,15 @@ export default function Dashboard() {
             <tbody className="divide-y divide-zinc-100">
               {filteredTasks.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-zinc-400 italic">Nenhuma tarefa encontrada</td>
+                  <td colSpan={5} className="px-6 py-12 text-center text-zinc-400 italic">
+                    {hasActiveFilters
+                      ? 'Nenhuma tarefa encontrada para os filtros selecionados'
+                      : 'Nenhuma tarefa ativa no momento'}
+                  </td>
                 </tr>
               ) : (
                 filteredTasks.map((task) => (
-                  <tr key={task.id} className="hover:bg-zinc-50 transition-colors group">
+                  <tr key={task.id} className="hover:bg-zinc-50 transition-colors">
                     <td className="px-6 py-4">
                       <p className="text-sm font-medium text-zinc-900">{task.title}</p>
                       <p className="text-xs text-zinc-500 truncate max-w-xs">{task.description}</p>
@@ -302,6 +402,7 @@ export default function Dashboard() {
           </table>
         </div>
       ) : (
+        /* Calendar View */
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
           <div className="p-4 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/50">
             <div className="flex items-center gap-4">
@@ -309,19 +410,19 @@ export default function Dashboard() {
                 {format(currentMonth, 'MMMM yyyy', { locale: ptBR })}
               </h2>
               <div className="flex items-center gap-1">
-                <button 
+                <button
                   onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}
                   className="p-1.5 hover:bg-zinc-200 rounded-md text-zinc-600 transition-colors"
                 >
                   <ChevronLeft size={18} />
                 </button>
-                <button 
+                <button
                   onClick={() => setCurrentMonth(new Date())}
                   className="px-2 py-1 text-xs font-bold text-zinc-500 hover:text-zinc-900 transition-colors"
                 >
                   Hoje
                 </button>
-                <button 
+                <button
                   onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}
                   className="p-1.5 hover:bg-zinc-200 rounded-md text-zinc-600 transition-colors"
                 >
@@ -345,27 +446,29 @@ export default function Dashboard() {
 
           <div className="grid grid-cols-7">
             {calendarDays.map((day, i) => {
-              const dayTasks = tasks.filter(t => t.dueDate && isSameDay(parseISO(t.dueDate), day));
+              // Calendar respects the active filters too
+              const dayTasks = filteredTasks.filter(
+                t => t.dueDate && isSameDay(parseISO(t.dueDate), day)
+              );
               const isCurrentMonth = isSameMonth(day, monthStart);
-              const isToday = isSameDay(day, new Date());
+              const isToday        = isSameDay(day, new Date());
 
               return (
-                <div 
-                  key={i} 
-                  className={`min-h-[120px] border-r border-b border-zinc-100 p-2 transition-colors ${!isCurrentMonth ? 'bg-zinc-50/50' : 'bg-white'}`}
+                <div
+                  key={i}
+                  className={`min-h-[120px] border-r border-b border-zinc-100 p-2 transition-colors
+                    ${!isCurrentMonth ? 'bg-zinc-50/50' : 'bg-white'}`}
                 >
                   <div className="flex justify-end mb-1">
-                    <span className={`text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full ${
-                      isToday ? 'bg-zinc-900 text-white' : 
-                      isCurrentMonth ? 'text-zinc-900' : 'text-zinc-300'
-                    }`}>
+                    <span className={`text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full
+                      ${isToday ? 'bg-zinc-900 text-white' : isCurrentMonth ? 'text-zinc-900' : 'text-zinc-300'}`}>
                       {format(day, 'd')}
                     </span>
                   </div>
                   <div className="space-y-1">
                     {dayTasks.slice(0, 3).map(task => (
-                      <div 
-                        key={task.id} 
+                      <div
+                        key={task.id}
                         className={`px-1.5 py-0.5 rounded text-[9px] font-bold truncate border ${getPriorityColor(task.priority)}`}
                         title={task.title}
                       >
